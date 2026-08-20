@@ -33,7 +33,7 @@
 
 ```bash
 # 本地 HTTP 服务（推荐）
-npx serve fixture/live
+npx serve fixture
 # 打开 http://localhost:3000/index.html
 ```
 
@@ -55,7 +55,7 @@ zhihu-edu-helper/
 ├── zhihu-live-helper.user.js        # 油猴脚本（交付物）
 └── fixture/
     ├── README.md                     # 文件说明
-    ├── index.html   # 本地开发测试页面（伪数据）
-    ├── trainingApps~training-live.original.css
-    └── vendors.original.css
+    ├── index.html                    # 本地开发测试页面（伪数据）
+    ├── trainingApps~training-live.original.css  # 原始主样式表
+    └── vendors.original.css          # 原始公共依赖样式表
 ```

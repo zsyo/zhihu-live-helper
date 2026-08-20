@@ -1,15 +1,16 @@
 // ==UserScript==
-// @name         知乎知学堂直播布局助手
-// @namespace    https://github.com/zsyo/zhihu-live-helper
-// @version      1.0.0
-// @description  重排知乎知学堂直播页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；顶部导航保持原始样式，仅重排下方主体区域。支持键盘快捷键、聊天新消息自动滚底与字号调节。
-// @author       zephyr
-// @match        https://www.zhihu.com/xen/training/live/*
-// @match        file:///*
-// @run-at       document-start
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_registerMenuCommand
+// @name        知乎知学堂直播布局助手
+// @namespace   https://github.com/zsyo/zhihu-live-helper
+// @version     1.1.0
+// @description 重排知乎知学堂直播页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；支持键盘快捷键、聊天新消息自动滚底与字号调节。
+// @author      zephyr
+// @match       https://www.zhihu.com/xen/training/live/*
+// @match       file:///*
+// @run-at      document-start
+// @grant       GM_getValue
+// @grant       GM_setValue
+// @grant       GM_registerMenuCommand
+// @license     MIT
 // @noframes
 // ==/UserScript==
 
@@ -21,7 +22,7 @@
  *   .PcLive-rightWrapper      width:296px         ← 聊天区固定宽
  *   .ShelfTopNav-root         position:fixed;width:100%  ← 顶栏(固定全宽, 不受 PcContent-root 影响)
  *
- * 本脚本只改下方主体区域(PcLive-liveWrapper 及其子树), 顶栏完全保持原始 CSS。
+ * 本脚本主要修改下方主体区域(PcLive-liveWrapper 及其子树)。
  * 类名带构建哈希后缀, 全部用 [class*="前缀"] 属性选择器; 锚点 ID #livePlayer 不变。
  */
 
@@ -63,13 +64,14 @@ html.zhx-enhanced [class*="PcContent-root"]{width:100% !important;max-width:none
 html.zhx-enhanced [class*="PcContent-headContentClassName"]{max-width:none !important;}
 html.zhx-enhanced [class*="ShelfTopNav-content"]{
   max-width:none !important;margin:0 !important;
-  padding:0 24px !important;box-sizing:border-box !important;
+  padding:0 50px !important;box-sizing:border-box !important;
 }
 /* 头像下拉菜单以头像为锚点右对齐弹出, 右侧留边距使菜单不溢出右边缘 */
-html.zhx-enhanced [class*="ShelfTopNav-right"]{padding-right:48px !important;}
-/* ===== 主体区域: 撑满宽度 ===== */
+html.zhx-enhanced [class*="ShelfTopNav-right"]{padding-right:0px !important;}
+/* ===== 主体区域: 撑满宽度, 顶部留出固定导航栏高度, 两侧留白避开悬浮条 ===== */
 html.zhx-enhanced [class*="PcLive-liveWrapper"]{
   width:100% !important;justify-content:flex-start !important;
+  padding:70px 50px 0 !important;box-sizing:border-box !important;
 }
 /* 左列: 视频列, 吃满剩余宽度 */
 html.zhx-enhanced [class*="PcLive-player"]{width:auto !important;flex:1 1 auto !important;min-width:0 !important;}
@@ -89,14 +91,17 @@ html.zhx-enhanced #livePlayer iframe{width:100% !important;height:100% !importan
 html.zhx-enhanced [class*="PcLive-announcementWrapper"]{width:100% !important;flex:0 0 auto !important;box-sizing:border-box !important;}
 html.zhx-enhanced [class*="PcLive-voteCard"]{width:100% !important;flex:0 0 auto !important;box-sizing:border-box !important;}
 html.zhx-enhanced [class*="PcLive-tabWrapper"]{width:100% !important;min-height:0 !important;flex:0 0 auto !important;box-sizing:border-box !important;}
-/* 右列: 聊天互动区, 可调宽, 高度跟随视频列 */
+/* 右列: 聊天互动区, 可调宽; align-self 拉到行高(跟随左列视频+公告+推荐的总高),
+   chatBox 自身用固定视口高度, 不随右列被拉高而拉伸, 客服条自然垫在其下 */
 html.zhx-enhanced [class*="PcLive-rightWrapper"]{
   width:var(--zhx-chat-w, ${DEFAULT_CHAT_W}) !important;
   flex:0 0 var(--zhx-chat-w, ${DEFAULT_CHAT_W}) !important;
   margin-left:10px;
   align-self:stretch;
 }
-html.zhx-enhanced [class*="PcLive-chatBox"]{height:calc(100vh - 140px) !important;}
+/* 聊天区固定高度: 视口减去顶栏(70px)和底部客服条(约70px), 保证占满主体而不被推荐卡片挤压 */
+html.zhx-enhanced [class*="PcLive-chatBox"]{height:calc(100vh - 140px) !important;min-height:0 !important;}
+html.zhx-enhanced [class*="PcChatBox-root"]{min-height:0 !important;overflow:hidden !important;}
 /* 播放器原生"网页全屏"时还原全屏几何(位于普通规则之后) */
 html.zhx-enhanced [class*="PcPlayer-playerWrapperFullScreen"]{
   position:absolute !important;z-index:40 !important;
