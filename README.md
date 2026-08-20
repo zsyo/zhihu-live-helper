@@ -19,13 +19,14 @@
 
 **设计原则**：只改 `PcContent-root` 宽度和下方主体区域（视频、聊天、公告、推荐）的布局；顶部导航解除 `max-width` 限制让图标和头像分居两端，但导航样式仍基于知乎原始 CSS。
 
-## 安装
+### 安装
 
-1. 浏览器安装 [脚本猫（ScriptCat）](https://docs.scriptcat.org/) 扩展（国人开源，功能强大）；
-2. 脚本猫面板 → 添加新脚本 → 粘贴 `zhihu-live-helper.user.js` 全部内容并保存；
-3. 打开任一知乎知学堂直播页（`www.zhihu.com/xen/training/live/...`）即可生效。
+**推荐使用 [ScriptCat](https://scriptcat.org/zh-CN)**（一个专注于用户脚本的浏览器扩展，轻量且开源）：
 
-> 也兼容 Tampermonkey 等其他支持 `@grant GM_*` API 的油猴扩展。
+- 🐱 ScriptCat（推荐）：https://scriptcat.org/zh-CN/script-show-page/7581
+- 🐵 Greasy Fork（备用）：https://greasyfork.org/zh-CN/scripts/592252
+
+> **为什么推荐 ScriptCat？** ScriptCat 是国人开发的开源用户脚本管理器，对国内网络环境更友好，安装和更新更加顺畅。如果你已在使用 Tampermonkey 或 Violentmonkey，Greasy Fork 链接同样可用。
 
 ## 用本地页面做开发测试
 
