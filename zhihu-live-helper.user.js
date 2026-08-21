@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.3.0
-// @description 重排知乎知学堂直播页与回放页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；支持键盘快捷键、聊天新消息自动滚底与字号调节；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度）与回车快捷发送互动消息；回放页同样优化布局（W 开关）。
+// @version     1.4.0
+// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度）与回车快捷发送互动消息；回放/公开课页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
 // @match       https://www.zhihu.com/xen/market/training/training-video/*
+// @match       https://www.zhihu.com/education/video-course/*
 // @run-at      document-start
 // @grant       GM_getValue
 // @grant       GM_setValue
@@ -196,6 +197,24 @@ html.zhx-enhanced [class*="VideoPlayer-content"]{width:100% !important;height:au
 html.zhx-enhanced [class*="VideoPlayer-video"]{width:100% !important;height:100% !important;object-fit:contain !important;}
 /* 回放右侧栏(App-aside: 课程目录/学习笔记): 保持原生宽与 Tab 轮播裁剪, 仅加左外边距与视频区留白 */
 html.zhx-enhanced [class*="App-aside"]{flex:0 0 auto !important;margin-left:10px !important;}
+/* ===== 公开课布局: TopNavBar + PcContent 前缀(独立 CSS 包, 与直播/回放不同) ===== */
+/* 顶栏内容撑满, 去除限宽(max-width:1156px), 左右 50px 留白 */
+html.zhx-enhanced [class*="TopNavBar-content"]{
+  max-width:none !important;width:auto !important;margin:0 !important;
+  padding:0 50px !important;box-sizing:border-box !important;
+}
+/* 主体: 去除原生 155px 大 padding 与 justify-center, 改为左右 50px 留白, flex 撑满;
+   顶部 padding 52px 让出固定顶栏(52px 高) */
+html.zhx-enhanced [class*="PcContent-content"]{max-width:none !important;width:100% !important;padding:52px 50px 0 !important;box-sizing:border-box !important;display:flex !important;justify-content:flex-start !important;align-items:flex-start !important;}
+/* 左列: 吃满剩余宽度 */
+html.zhx-enhanced [class*="PcContent-leftContainer"]{width:auto !important;flex:1 1 auto !important;min-width:0 !important;}
+html.zhx-enhanced [class*="PcContent-videoWrapper"]{width:100% !important;height:auto !important;}
+/* 视频容器: 16:9 随左列宽度自适应 */
+html.zhx-enhanced [class*="VideoPlayer-videoPlayerContainer"]{width:100% !important;height:auto !important;aspect-ratio:16/9 !important;}
+/* 视频元素: CSS Modules 短哈希类名(如 _1k7bcr7)每次构建变化, 用容器内 video 兜底 */
+html.zhx-enhanced [class*="PcContent-content"] video{width:100% !important;height:100% !important;object-fit:contain !important;}
+/* 右列(课程目录): 保持原生 300px, 仅加左外边距 */
+html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;margin-left:10px !important;}
 `;
 
   let styleEl = null;
@@ -592,9 +611,20 @@ html.zhx-enhanced [class*="App-aside"]{flex:0 0 auto !important;margin-left:10px
     setupMenu();
   }
 
+  // 公开课初始化: 仅布局增强 + W 开关, 无全屏/弹幕/聊天
+  function initPublic() {
+    console.log(LOG, '检测到公开课, 初始化公开课布局');
+    ensureStyle();
+    setupToast();
+    applyMode();
+    setupShortcuts();
+    setupMenu();
+  }
+
   function boot() {
     if ($find('PcLive-liveWrapper')) { pageType = 'live'; init(); return true; }
     if ($find('App-content') || $find('VideoPlayer-content')) { pageType = 'replay'; initReplay(); return true; }
+    if ($find('PcContent-content') && $find('VideoPlayer-videoPlayerContainer')) { pageType = 'public'; initPublic(); return true; }
     return false;
   }
 
