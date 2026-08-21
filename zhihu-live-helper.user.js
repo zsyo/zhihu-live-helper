@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.4.0
-// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度）与回车快捷发送互动消息；回放/公开课页同样优化布局（W 开关）。
+// @version     1.5.0
+// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度，仅推全屏后新发言）、Enter 唤起底部输入框发送（发送后或点空白处自动收起）；回放/公开课页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
 // @match       https://www.zhihu.com/xen/market/training/training-video/*
@@ -140,11 +140,25 @@ html.zhx-theater [class*="PcLive-tabWrapper"],
 html.zhx-theater [class*="PcLive-voteCard"],
 html.zhx-theater [class*="PcLive-customerCall"],
 html.zhx-theater [class*="FloatingWindow"]{display:none !important;}
-/* 全屏: 视频列吃满, 右栏聊天盒隐藏(弹幕替代它), 仅留底部输入浮层 */
+/* 全屏: 视频列吃满, 右栏聊天盒离屏保留(喂弹幕), 仅留底部输入浮层 */
 html.zhx-theater [class*="PcLive-player"]{width:100% !important;flex:1 1 auto !important;min-width:0 !important;}
 html.zhx-theater [class*="PcLive-rightWrapper"]{width:0 !important;flex:0 0 0 !important;overflow:visible !important;margin:0 !important;}
-html.zhx-theater [class*="PcLive-chatBox"]{display:none !important;}
+/* 聊天盒离屏保留: 不可 display:none, 否则 ReactVirtualized 虚拟列表 clientHeight 归零
+   停止渲染消息行, MutationObserver 断流导致弹幕无数据源。改为移出视口+透明+禁交互,
+   保留其原生高度(calc(100vh-70px))让虚拟列表继续渲染并喂弹幕 */
+html.zhx-theater [class*="PcLive-chatBox"]{
+  position:fixed !important;top:-100vh !important;left:0 !important;width:296px !important;
+  height:calc(100vh - 70px) !important;
+  opacity:0 !important;pointer-events:none !important;z-index:-1 !important;
+}
+/* 全屏高度链: PcLive-player 原生 flex-direction:column, 其无 class 包裹 div 需显式撑满,
+   否则 playerWrapper 的 height:100% 参考坍缩父级导致视频塌缩为黑底 */
+html.zhx-theater [class*="PcLive-player"] > div{height:100% !important;width:100% !important;}
 html.zhx-theater [class*="PcPlayer-playerWrapper"]{height:100% !important;width:100% !important;aspect-ratio:auto !important;}
+html.zhx-theater [class*="PcPlayer-wh100"],
+html.zhx-theater [class*="PcPlayer-streams"],
+html.zhx-theater [class*="PcPlayer-livePlayerWrapper"],
+html.zhx-theater #livePlayer{height:100% !important;width:100% !important;}
 /* ===== 弹幕轨道层: 高度由 --zhx-dm-area 决定(可调档) ===== */
 #zhx-danmaku{
   position:fixed;top:0;left:0;width:100%;height:var(--zhx-dm-area, 20vh);
@@ -153,8 +167,9 @@ html.zhx-theater [class*="PcPlayer-playerWrapper"]{height:100% !important;width:
 html.zhx-theater #zhx-danmaku{display:block;}
 .zhx-dm-track{
   position:absolute;left:100%;white-space:nowrap;will-change:transform;
-  font-size:22px;line-height:36px;color:#fff;
-  text-shadow:0 0 3px rgba(0,0,0,.9),0 1px 2px rgba(0,0,0,.8);
+  font-size:22px;line-height:36px;color:#fff;font-weight:700;
+  -webkit-text-stroke:1px #000;text-stroke:1px #000;
+  paint-order:stroke fill;
   animation:zhx-dm-scroll linear forwards;
 }
 @keyframes zhx-dm-scroll{from{transform:translateX(0)}to{transform:translateX(calc(-100vw - 100%))}}
@@ -162,17 +177,26 @@ html.zhx-theater #zhx-danmaku{display:block;}
 #zhx-input-bar{
   position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(150%);
   width:min(640px,90vw);z-index:2147483647;
-  display:none;align-items:center;gap:8px;visibility:hidden;pointer-events:none;
-  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:24px;padding:8px 8px 8px 18px;
+  display:none;align-items:center;gap:20px;visibility:hidden;pointer-events:none;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:24px;padding:8px 20px 8px 18px;
   transition:transform .18s ease,visibility 0s linear .18s;
 }
 /* 仅全屏时启用浮层; 唤起时上移并可见 */
 html.zhx-theater #zhx-input-bar{display:flex;}
 #zhx-input-slot{flex:1 1 auto;min-width:0;}
 #zhx-input-bar.zhx-show{transform:translateX(-50%) translateY(0);visibility:visible;pointer-events:auto;transition:transform .18s ease,visibility 0s;}
-html.zhx-theater [class*="PcInputBox-root"]{width:100% !important;}
-html.zhx-theater [class*="PcInputBox-textareaWrapper"]{width:100% !important;display:flex !important;align-items:center !important;}
-html.zhx-theater [class*="PcInputBox-textarea"]{height:48px !important;background:transparent !important;color:#fff !important;border:none !important;}
+html.zhx-theater [class*="PcInputBox-root"]{width:100% !important;display:flex !important;align-items:center !important;}
+html.zhx-theater [class*="PcInputBox-root"]:after{display:none !important;} /* 去掉原生输入框顶部分隔线 */
+html.zhx-theater [class*="PcInputBox-textareaWrapper"]{width:100% !important;display:flex !important;align-items:center !important;padding-top:0 !important;}
+html.zhx-theater [class*="PcInputBox-textarea"]{
+  height:48px !important;line-height:48px !important;background:transparent !important;color:#fff !important;
+  border:none !important;padding:0 20px 0 0 !important;font-size:15px !important;resize:none !important;
+  white-space:nowrap !important;overflow-x:auto !important;overflow-y:hidden !important;
+}
+/* 隐藏输入框横向滚动条(保留鼠标选中拖动查看能力, 但不显示滚动条) */
+html.zhx-theater [class*="PcInputBox-textarea"]::-webkit-scrollbar{display:none;}
+html.zhx-theater [class*="PcInputBox-textarea"]{scrollbar-width:none;}
+html.zhx-theater [class*="PcInputBox-textarea"]::placeholder{color:rgba(255,255,255,.45) !important;}
 html.zhx-theater [class*="PcInputBox-sendBtnWrapper"],
 html.zhx-theater [class*="PcInputBox-clickTip"]{display:none !important;} /* 字数计数/提示不需要 */
 html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
@@ -328,10 +352,9 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       const t = e.target;
       const inField = !!(t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable));
 
-      // 全屏输入态: 仅 ESC 收起 / F 退出全屏; Enter 放行交原生发送; 其余忽略避免打字误触
+      // 全屏输入态: 所有按键(含 F/D/W 等)一律放行作为普通字符输入,
+      // 不触发任何快捷键, 避免打字误触全屏/弹幕开关。收起输入框用点击空白处或发送后自动收起。
       if (isTheater() && inField) {
-        if (e.key === 'Escape') { hideInputBar(); t.blur(); e.preventDefault(); }
-        else if (e.key === 'f' || e.key === 'F') { toggleTheater(); e.preventDefault(); }
         return;
       }
       if (inField) return;
@@ -401,7 +424,36 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
   // ================= 弹幕层 =================
   let dmEl = null;
   const trackReadyAt = []; // 每轨道下次可用时间戳
-  const dmSeen = new WeakSet(); // 已推过弹幕的消息节点
+  const dmSeen = new Set(); // 已推过弹幕的消息内容(name|text), 按 text 去重避免虚拟列表重建节点导致重复
+
+  // 把聊天盒当前已有的消息内容存入基线集合, 进入全屏时调用,
+  // 这样全屏前的历史消息不会进入弹幕, 只推全屏后的新发言
+  function markExistingMessages() {
+    const box = $find('PcChatBox-root');
+    if (!box) return;
+    const items = box.querySelectorAll('[class*="Message-root"]');
+    if (items.length) {
+      items.forEach(el => {
+        const key = msgKey(el);
+        if (key) dmSeen.add(key);
+      });
+    } else {
+      box.querySelectorAll('[class*="Message-content"], [data-zhx-mock="chat"] > div').forEach(el => {
+        const t = el.textContent.trim();
+        if (t) dmSeen.add('|' + t);
+      });
+    }
+  }
+
+  // 提取消息节点的去重 key(name|text), 空内容返回空串
+  function msgKey(el) {
+    const nameEl = el.querySelector('[class*="Message-name"]');
+    const bodyEl = el.querySelector('[class*="Message-messageWrapper"]');
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    const text = bodyEl ? bodyEl.textContent.trim()
+                        : (el.querySelector('[class*="Message-content"]')?.textContent.trim() || '');
+    return text ? name + '|' + text : '';
+  }
 
   function setupDanmaku() {
     dmEl = document.createElement('div');
@@ -429,7 +481,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
         // 每条速度加 ±2s 抖动避免首尾完全对齐
         const dur = Math.max(DM_DURATION_MIN, state.dmSpeed + (Math.random() * 4 - 2));
         item.style.animationDuration = dur + 's';
-        item.textContent = name ? `${name}: ${text}` : text;
+        item.textContent = name ? `${name.replace(/[:：]\s*$/, '')}: ${text}` : text;
         item.addEventListener('animationend', () => item.remove());
         dmEl.appendChild(item);
         return;
@@ -443,8 +495,9 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     const items = box.querySelectorAll('[class*="Message-root"]');
     if (items.length) {
       for (const el of items) {
-        if (dmSeen.has(el)) continue;
-        dmSeen.add(el);
+        const key = msgKey(el);
+        if (!key || dmSeen.has(key)) continue;
+        dmSeen.add(key);
         const nameEl = el.querySelector('[class*="Message-name"]');
         const bodyEl = el.querySelector('[class*="Message-messageWrapper"]');
         const name = nameEl ? nameEl.textContent.trim() : '';
@@ -454,9 +507,10 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       }
     } else { // 兜底: mock 或无 Message-root 结构, 读直接子项纯文本
       for (const el of box.querySelectorAll('[class*="Message-content"], [data-zhx-mock="chat"] > div')) {
-        if (dmSeen.has(el)) continue;
-        dmSeen.add(el);
-        pushDanmaku('', el.textContent.trim());
+        const t = el.textContent.trim();
+        if (!t || dmSeen.has('|' + t)) continue;
+        dmSeen.add('|' + t);
+        pushDanmaku('', t);
       }
     }
   }
@@ -479,6 +533,8 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
 
   function onEnterTheater() {
     document.documentElement.classList.add('zhx-theater');
+    // 进入全屏前, 把聊天区已有消息预标记为已见, 弹幕只推送全屏后的新发言
+    markExistingMessages();
     // 把原输入框搬进底部浮层(复用原生 Enter 发送)
     const input = $find('PcInputBox-root');
     const slot = document.getElementById('zhx-input-slot');
@@ -486,6 +542,14 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       inputOriginalParent = input.parentElement;
       slot.appendChild(input);
     }
+    // 弹幕层与输入浮层默认挂在 body, 但全屏元素(PcLive-liveWrapper)处于 top layer 时
+    // 会遮挡其外部(body 上)的 fixed 元素, 导致弹幕/输入框不可见。进入全屏时搬进全屏元素,
+    // fixed 定位即以全屏元素为参照铺满画面; 退出时搬回 body。
+    const fsEl = $find('PcLive-liveWrapper');
+    const dm = document.getElementById('zhx-danmaku');
+    const bar = document.getElementById('zhx-input-bar');
+    if (fsEl && dm && dm.parentElement !== fsEl) fsEl.appendChild(dm);
+    if (fsEl && bar && bar.parentElement !== fsEl) fsEl.appendChild(bar);
     scheduleRefit();
     toast('真全屏 · Enter 唤起输入框 · D 弹幕开关');
     // 原生退出兜底: ESC/F11/标签失焦时浏览器自动退出, 由 fullscreenchange 收尾
@@ -498,6 +562,11 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     const input = $find('PcInputBox-root');
     if (input && inputOriginalParent) inputOriginalParent.appendChild(input);
     inputOriginalParent = null;
+    // 弹幕层与输入浮层搬回 body(恢复非全屏态的默认挂载位置)
+    const dm = document.getElementById('zhx-danmaku');
+    const bar = document.getElementById('zhx-input-bar');
+    if (dm && dm.parentElement !== document.body) document.body.appendChild(dm);
+    if (bar && bar.parentElement !== document.body) document.body.appendChild(bar);
     clearDanmaku();
     hideInputBar();
     scheduleRefit();
@@ -518,10 +587,37 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     slot.id = 'zhx-input-slot';
     const hint = document.createElement('span');
     hint.id = 'zhx-input-hint';
-    hint.textContent = 'Enter 发送 · ESC 收起';
+    hint.textContent = 'Enter 发送 · 点空白处收起';
     bar.appendChild(slot);
     bar.appendChild(hint);
     document.body.appendChild(bar);
+
+    // 全屏态下点击输入浮层之外的区域, 收起输入框
+    document.addEventListener('mousedown', (e) => {
+      if (!isTheater()) return;
+      const b = document.getElementById('zhx-input-bar');
+      if (!b || !b.classList.contains('zhx-show')) return;
+      if (b.contains(e.target)) return; // 点在浮层内不收起
+      hideInputBar();
+      const ta = $find('PcInputBox-textarea');
+      if (ta) ta.blur();
+    });
+
+    // 监听 Enter 发送: 输入态下按 Enter(非 Shift 换行), 延迟检测内容是否被原生发送清空,
+    // 清空了才收起(发送失败/频率限制时内容仍在, 不收起)。退格清空不触发。
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      if (!isTheater()) return;
+      const ta = e.target;
+      if (!ta || ta.tagName !== 'TEXTAREA') return;
+      const bar = document.getElementById('zhx-input-bar');
+      if (!bar || !bar.classList.contains('zhx-show')) return;
+      if (ta.value.length === 0) return; // 空内容不算发送
+      setTimeout(() => {
+        if (!isTheater()) return;
+        if (ta.value.length === 0) { hideInputBar(); ta.blur(); }
+      }, 100);
+    }, true);
   }
 
   function showInputBar() {
