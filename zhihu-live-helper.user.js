@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.2.0
-// @description 重排知乎知学堂直播页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；支持键盘快捷键、聊天新消息自动滚底与字号调节；支持真全屏（F 键）、全屏弹幕（可调显示区域/速度）与回车快捷发送互动消息。
+// @version     1.3.0
+// @description 重排知乎知学堂直播页与回放页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；支持键盘快捷键、聊天新消息自动滚底与字号调节；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度）与回车快捷发送互动消息；回放页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
+// @match       https://www.zhihu.com/xen/market/training/training-video/*
 // @run-at      document-start
 // @grant       GM_getValue
 // @grant       GM_setValue
@@ -67,6 +68,9 @@
   function isTheater() {
     return !!document.fullscreenElement && document.documentElement.classList.contains('zhx-theater');
   }
+
+  // 页面类型: 'live'(直播) / 'replay'(回放), 启动时按容器特征判定
+  let pageType = null;
 
   // ================= 样式 =================
   // 顶栏: 解除 max-width 限制并加左右对称 padding, 让 logo 和头像分别靠两端且与主体留白对齐
@@ -178,6 +182,20 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
   font-size:13px;pointer-events:none;opacity:0;transition:opacity .25s;
 }
 #zhx-toast.zhx-show{opacity:1;}
+/* ===== 回放页布局: 顶栏复用直播页规则(ShelfTopNav 同款), 主体用 App / VideoPlayer 前缀 ===== */
+/* 顶栏: App-navContent 在回放页把 ShelfTopNav-content 限宽到 1000px, 需一并去除限宽并左右留白 */
+html.zhx-enhanced [class*="App-navContent"]{
+  max-width:none !important;width:auto !important;margin:0 !important;
+  padding:0 50px !important;box-sizing:border-box !important;
+}
+/* 主体: 原生 App-content 已有 margin-top:70px 让出固定顶栏(60px), 这里只加左右留白, 顶部不再叠加 padding */
+html.zhx-enhanced [class*="App-content"]{max-width:none !important;width:100% !important;padding:0 50px !important;box-sizing:border-box !important;display:flex !important;}
+html.zhx-enhanced [class*="App-main"]{max-width:none !important;width:auto !important;flex:1 1 auto !important;min-width:0 !important;}
+/* 回放视频区: 容器 16:9 随主体宽度自适应; 视频填满容器(原生 width:100%/height:100%) */
+html.zhx-enhanced [class*="VideoPlayer-content"]{width:100% !important;height:auto !important;aspect-ratio:16/9 !important;flex:0 0 auto !important;min-width:0 !important;}
+html.zhx-enhanced [class*="VideoPlayer-video"]{width:100% !important;height:100% !important;object-fit:contain !important;}
+/* 回放右侧栏(App-aside: 课程目录/学习笔记): 保持原生宽与 Tab 轮播裁剪, 仅加左外边距与视频区留白 */
+html.zhx-enhanced [class*="App-aside"]{flex:0 0 auto !important;margin-left:10px !important;}
 `;
 
   let styleEl = null;
@@ -259,7 +277,7 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
     store.set(K.chatW, state.chatW);
     applyChatW();
     scheduleRefit();
-    toast(`聊天区宽度 ${state.chatW}px`);
+    toast(`右栏宽度 ${state.chatW}px`);
   }
 
   function resetChatWidth() {
@@ -267,7 +285,7 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
     store.set(K.chatW, null);
     applyChatW();
     scheduleRefit();
-    toast('聊天区宽度 已重置为默认');
+    toast('右栏宽度 已重置为默认');
   }
 
   function nudgeChatFs(delta) {
@@ -300,15 +318,15 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
       if (inField) return;
       switch (e.key) {
         case 'w': case 'W': toggleEnhanced(); break;
-        case 'f': case 'F': toggleTheater(); break;
-        case 'd': case 'D': toggleDanmaku(); break;
-        case '.': nudgeDmArea(+1); break;   // 弹幕显示区域增大
-        case ',': nudgeDmArea(-1); break;   // 弹幕显示区域减小
-        case '=': nudgeDmSpeed(-DM_DURATION_STEP); break; // 加快(减秒)
-        case '-': nudgeDmSpeed(+DM_DURATION_STEP); break; // 减慢(加秒)
-        case ']': nudgeChatWidth(+CHAT_W_STEP); break;
-        case '[': nudgeChatWidth(-CHAT_W_STEP); break;
-        case '0': resetChatWidth(); break;
+        case 'f': case 'F': if (pageType === 'live') toggleTheater(); else return; break;
+        case 'd': case 'D': if (pageType === 'live') toggleDanmaku(); else return; break;
+        case '.': if (pageType === 'live') nudgeDmArea(+1); else return; break;
+        case ',': if (pageType === 'live') nudgeDmArea(-1); else return; break;
+        case '=': if (pageType === 'live') nudgeDmSpeed(-DM_DURATION_STEP); else return; break;
+        case '-': if (pageType === 'live') nudgeDmSpeed(+DM_DURATION_STEP); else return; break;
+        case ']': if (pageType === 'live') nudgeChatWidth(+CHAT_W_STEP); else return; break;
+        case '[': if (pageType === 'live') nudgeChatWidth(-CHAT_W_STEP); else return; break;
+        case '0': if (pageType === 'live') resetChatWidth(); else return; break;
         case 'Enter': if (isTheater()) { showInputBar(); focusInput(); e.preventDefault(); } break;
         default: return;
       }
@@ -532,9 +550,10 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
   function setupMenu() {
     if (typeof GM_registerMenuCommand !== 'function') return;
     GM_registerMenuCommand('切换布局增强 (快捷键 W)', toggleEnhanced);
-    GM_registerMenuCommand('聊天区变宽 ( ] )', () => nudgeChatWidth(+CHAT_W_STEP));
-    GM_registerMenuCommand('聊天区变窄 ( [ )', () => nudgeChatWidth(-CHAT_W_STEP));
-    GM_registerMenuCommand('聊天区宽度重置 (0)', resetChatWidth);
+    if (pageType === 'replay') return; // 回放页: 仅布局开关; 右栏宽度/全屏/弹幕/字号均为直播页专用
+    GM_registerMenuCommand('右栏变宽 ( ] )', () => nudgeChatWidth(+CHAT_W_STEP));
+    GM_registerMenuCommand('右栏变窄 ( [ )', () => nudgeChatWidth(-CHAT_W_STEP));
+    GM_registerMenuCommand('右栏宽度重置 (0)', resetChatWidth);
     GM_registerMenuCommand('聊天字号增大', () => nudgeChatFs(+1));
     GM_registerMenuCommand('聊天字号减小', () => nudgeChatFs(-1));
     GM_registerMenuCommand('聊天字号重置', resetChatFs);
@@ -563,8 +582,19 @@ html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
     setupMenu();
   }
 
+  // 回放页初始化: 仅布局增强 + W 开关, 无全屏/弹幕/聊天/右栏调宽
+  function initReplay() {
+    console.log(LOG, '检测到回放页, 初始化回放布局');
+    ensureStyle();
+    setupToast();
+    applyMode();
+    setupShortcuts();
+    setupMenu();
+  }
+
   function boot() {
-    if ($find('PcLive-liveWrapper')) { init(); return true; }
+    if ($find('PcLive-liveWrapper')) { pageType = 'live'; init(); return true; }
+    if ($find('App-content') || $find('VideoPlayer-content')) { pageType = 'replay'; initReplay(); return true; }
     return false;
   }
 
