@@ -13,13 +13,14 @@
 
 1. 打开一个真实的知乎知学堂对应页面
 2. 从页面源码的 `<link rel="stylesheet">` 标签中获取当前 CSS 的完整 URL（含最新哈希）
-3. 下载新 CSS，与对应子目录的旧文件对比
+3. 下载新 CSS，与本目录下对应的旧文件对比
 4. 确认类名前缀（如 `PcLive-`、`PcPlayer-`、`ShelfTopNav-`）是否仍然有效
 5. 如有变化，更新 `zhihu-live-helper.user.js` 中的属性前缀选择器
 
 ```bash
 # 下载最新 CSS（URL 从对应页面 <link> 标签获取）
 curl -s "https://static.zhihu.com/education-webapp/.../<新哈希文件名>.css" -o /tmp/new.css
-# 对比
-diff fixture/原始文件.css /tmp/new.css
+# 对比（主样式表 / 公共依赖分别 diff）
+diff fixture/trainingApps~training-live.original.css /tmp/new.css
+diff fixture/vendors.original.css /tmp/new.css
 ```

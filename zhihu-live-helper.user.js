@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.1.0
+// @version     1.1.1
 // @description 重排知乎知学堂直播页：视频区随窗口自适应并占据主体（16:9），右侧聊天互动区约 1/5~1/4 宽；支持键盘快捷键、聊天新消息自动滚底与字号调节。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
@@ -56,18 +56,16 @@
   const $find = (prefix, root) => (root || document).querySelector(`[class*="${prefix}"]`);
 
   // ================= 样式 =================
-  // 顶栏: 解除 max-width 限制, 让 logo 和头像分别靠两端; 加 padding 留出合理边距
-  // (头像下拉菜单以头像为锚点弹出, 右侧多留边距使菜单相对头像居中不溢出)
+  // 顶栏: 解除 max-width 限制并加左右对称 padding, 让 logo 和头像分别靠两端且与主体留白对齐
   const CSS = `
-/* ===== 顶栏: logo 左、头像右, 撑满全宽 ===== */
+/* ===== 顶栏: logo 左、头像右, 撑满全宽(左右对称留白与主体一致) ===== */
 html.zhx-enhanced [class*="PcContent-root"]{width:100% !important;max-width:none !important;}
 html.zhx-enhanced [class*="PcContent-headContentClassName"]{max-width:none !important;}
 html.zhx-enhanced [class*="ShelfTopNav-content"]{
   max-width:none !important;margin:0 !important;
   padding:0 50px !important;box-sizing:border-box !important;
 }
-/* 头像下拉菜单以头像为锚点右对齐弹出, 右侧留边距使菜单不溢出右边缘 */
-html.zhx-enhanced [class*="ShelfTopNav-right"]{padding-right:0px !important;}
+/* ShelfTopNav-right 不再额外加 padding, 头像右侧留白由上方 content 的 padding 统一提供 */
 /* ===== 主体区域: 撑满宽度, 顶部留出固定导航栏高度, 两侧留白避开悬浮条 ===== */
 html.zhx-enhanced [class*="PcLive-liveWrapper"]{
   width:100% !important;justify-content:flex-start !important;
@@ -135,9 +133,12 @@ html.zhx-enhanced [class*="PcChatBox-root"] [class*="Message-content"]{font-size
   function clearPlayerInlineSizes() {
     const lp = document.getElementById('livePlayer');
     if (!lp) return;
+    // 看门狗高频调用, 先用 querySelector 粗筛: 无 px 内联样式则跳过整棵子树遍历
+    if (!lp.style.width.endsWith('px') && !lp.style.height.endsWith('px')
+        && !lp.querySelector('[style*="px"]')) return;
     if (lp.style.width.endsWith('px')) lp.style.width = '';
     if (lp.style.height.endsWith('px')) lp.style.height = '';
-    for (const el of lp.querySelectorAll('*')) {
+    for (const el of lp.querySelectorAll('[style*="px"]')) {
       if (el.style.width.endsWith('px')) el.style.width = '';
       if (el.style.height.endsWith('px')) el.style.height = '';
     }
@@ -254,14 +255,14 @@ html.zhx-enhanced [class*="PcChatBox-root"] [class*="Message-content"]{font-size
   }
 
   function bindChatAutoScroll() {
-    let bound = false, stick = true, scroller = null;
+    let stick = true, scroller = null;
 
     const attach = () => {
       const box = $find('PcChatBox-root');
       if (!box) return false;
       const el = findChatScroller();
       if (!el) return false;
-      bound = true; scroller = el; stick = true;
+      scroller = el; stick = true;
       el.addEventListener('scroll', () => {
         if (!scroller) return;
         stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
