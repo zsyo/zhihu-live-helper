@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.5.0
-// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度，仅推全屏后新发言）、Enter 唤起底部输入框发送（发送后或点空白处自动收起）；回放/公开课页同样优化布局（W 开关）。
+// @version     1.6.0
+// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度，仅推全屏后新发言）、全屏底部浮动控制条（左侧条形聊天输入框+蓝色发送按钮：回车发送、最多 80 字、空内容回车退出输入态；弹幕开/关与弹幕设置悬浮窗：区域 1/8~1/5 与速度 6~16s 线段档位点选；音量 0-100 与静音；鼠标移动唤出，3 秒无操作自动隐藏，打字/悬停/设置窗开着时保活）；回放/公开课页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
 // @match       https://www.zhihu.com/xen/market/training/training-video/*
@@ -32,14 +32,16 @@
 
   const LOG = '[知学堂直播助手]';
   const K = { enabled: 'zhx_enabled', chatW: 'zhx_chat_w', chatFs: 'zhx_chat_fs',
-              danmaku: 'zhx_danmaku', dmArea: 'zhx_dm_area', dmSpeed: 'zhx_dm_speed' };
+              danmaku: 'zhx_danmaku', dmArea: 'zhx_dm_area', dmSpeed: 'zhx_dm_speed',
+              volume: 'zhx_volume', muted: 'zhx_muted' };
   const DEFAULT_CHAT_W = 'clamp(280px, 22vw, 460px)'; // ≈ 1/5 ~ 1/4 视口宽
   const CHAT_W_MIN = 240, CHAT_W_MAX = 480, CHAT_W_STEP = 20;
   const FS_MIN = 12, FS_MAX = 20;
   // 弹幕配置: 显示区域 4 档(层高占视口比), 轨道高, 滚完秒数(越小越快), 在屏上限
-  const DM_AREA_LEVELS = ['12.5vh', '16.5vh', '20vh', '25vh']; // 1/8 → ~1/6 → 1/5 → 1/4
+  const DM_AREA_LEVELS = ['12.5vh', '14.3vh', '16.7vh', '20vh']; // 1/8 → 1/5, 4 档
+  const DM_AREA_TEXTS = ['1/8', '1/7', '1/6', '1/5'];             // 显示区域档位文案
   const DM_TRACK_H = 36;
-  const DM_DURATION_MIN = 6, DM_DURATION_MAX = 20, DM_DURATION_STEP = 2;
+  const DM_DURATION_MIN = 6, DM_DURATION_MAX = 16, DM_DURATION_STEP = 2;
   const DM_MAX = 60;
 
   // ---- 存储层: 有 GM 用 GM, 无 GM(本地注入测试)退化为 localStorage ----
@@ -59,8 +61,10 @@
     chatW: store.get(K.chatW, null),   // null = 默认 clamp
     chatFs: store.get(K.chatFs, 14),
     danmaku: store.get(K.danmaku, true),  // 全屏弹幕开关
-    dmArea: store.get(K.dmArea, 2),       // 0-3, 默认档3(1/5 屏)
-    dmSpeed: store.get(K.dmSpeed, 12),     // 单条弹幕滚完秒数, 越小越快
+    dmArea: store.get(K.dmArea, 2),       // 0-3, 默认档3(1/6 屏)
+    dmSpeed: Math.min(DM_DURATION_MAX, Math.max(DM_DURATION_MIN, store.get(K.dmSpeed, 10))), // 滚完秒数, 默认10s, 越小越快; 旧持久化超新范围时收敛
+    volume: store.get(K.volume, null),     // 音量 0-100, null=用户未调过(不干预 SDK 默认)
+    muted: store.get(K.muted, false),       // 静音开关
   };
 
   const $find = (prefix, root) => (root || document).querySelector(`[class*="${prefix}"]`);
@@ -70,7 +74,7 @@
     return !!document.fullscreenElement && document.documentElement.classList.contains('zhx-theater');
   }
 
-  // 页面类型: 'live'(直播) / 'replay'(回放), 启动时按容器特征判定
+  // 页面类型: 'live'(直播) / 'replay'(回放) / 'public'(公开课), 启动时按容器特征判定
   let pageType = null;
 
   // ================= 样式 =================
@@ -140,7 +144,7 @@ html.zhx-theater [class*="PcLive-tabWrapper"],
 html.zhx-theater [class*="PcLive-voteCard"],
 html.zhx-theater [class*="PcLive-customerCall"],
 html.zhx-theater [class*="FloatingWindow"]{display:none !important;}
-/* 全屏: 视频列吃满, 右栏聊天盒离屏保留(喂弹幕), 仅留底部输入浮层 */
+/* 全屏: 视频列吃满, 右栏聊天盒离屏保留(喂弹幕), 聊天输入框整合在底部浮动控制条中 */
 html.zhx-theater [class*="PcLive-player"]{width:100% !important;flex:1 1 auto !important;min-width:0 !important;}
 html.zhx-theater [class*="PcLive-rightWrapper"]{width:0 !important;flex:0 0 0 !important;overflow:visible !important;margin:0 !important;}
 /* 聊天盒离屏保留: 不可 display:none, 否则 ReactVirtualized 虚拟列表 clientHeight 归零
@@ -173,34 +177,100 @@ html.zhx-theater #zhx-danmaku{display:block;}
   animation:zhx-dm-scroll linear forwards;
 }
 @keyframes zhx-dm-scroll{from{transform:translateX(0)}to{transform:translateX(calc(-100vw - 100%))}}
-/* ===== 全屏底部输入浮层(复用原 PcInputBox) ===== */
-#zhx-input-bar{
-  position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(150%);
-  width:min(640px,90vw);z-index:2147483647;
-  display:none;align-items:center;gap:20px;visibility:hidden;pointer-events:none;
-  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:24px;padding:8px 20px 8px 18px;
-  transition:transform .18s ease,visibility 0s linear .18s;
+/* ===== 全屏控制条: 聊天输入组(复用原 PcInputBox) =====
+   灰底整体画在输入槽(slot)上并锁定 32px 高(与发送按钮/其他控件一致,
+   原生容器内的其他元素不再影响灰底高度, 超出部分裁剪) */
+#zhx-input-slot{
+  flex:1 1 auto;min-width:220px;display:flex;align-items:center;
+  height:32px;overflow:hidden;
+  background:#4a515c66;border-radius:8px 0 0 8px;
 }
-/* 仅全屏时启用浮层; 唤起时上移并可见 */
-html.zhx-theater #zhx-input-bar{display:flex;}
-#zhx-input-slot{flex:1 1 auto;min-width:0;}
-#zhx-input-bar.zhx-show{transform:translateX(-50%) translateY(0);visibility:visible;pointer-events:auto;transition:transform .18s ease,visibility 0s;}
-html.zhx-theater [class*="PcInputBox-root"]{width:100% !important;display:flex !important;align-items:center !important;}
+/* 发送按钮/字数统计抽出后的自建容器, 与输入槽平级拼接:
+   负边距抵消工具条全局 gap(12px)并压掉渲染亚像素缝, 按钮固定 32px 与输入框等高 */
+#zhx-send-host{display:flex;align-items:center;flex:0 0 auto;margin-left:-13px;}
+html.zhx-theater [class*="PcInputBox-root"]{flex:1 1 auto;min-width:0;display:flex !important;align-items:stretch !important;background:transparent !important;width:auto !important;margin:0 !important;padding:0 !important;}
 html.zhx-theater [class*="PcInputBox-root"]:after{display:none !important;} /* 去掉原生输入框顶部分隔线 */
-html.zhx-theater [class*="PcInputBox-textareaWrapper"]{width:100% !important;display:flex !important;align-items:center !important;padding-top:0 !important;}
+html.zhx-theater [class*="PcInputBox-sendBtnWrapper"]{display:none !important;} /* 按钮已抽出, 空壳全隐藏 */
+/* 输入区: 灰底由 slot 提供, textarea 透明仅负责文字; 单行跑马灯(超宽横向滚动, 滚动条隐藏) */
+html.zhx-theater [class*="PcInputBox-textareaWrapper"]{
+  flex:1 1 auto;min-width:0;display:flex !important;align-items:center !important;
+  margin:0 !important;padding:0 !important;
+}
 html.zhx-theater [class*="PcInputBox-textarea"]{
-  height:48px !important;line-height:48px !important;background:transparent !important;color:#fff !important;
-  border:none !important;padding:0 20px 0 0 !important;font-size:15px !important;resize:none !important;
+  width:100% !important;height:32px !important;line-height:22px;
+  background:transparent !important;color:#fff !important;
+  border:none !important;padding:5px 12px !important;font-size:14px !important;resize:none !important;
   white-space:nowrap !important;overflow-x:auto !important;overflow-y:hidden !important;
 }
-/* 隐藏输入框横向滚动条(保留鼠标选中拖动查看能力, 但不显示滚动条) */
 html.zhx-theater [class*="PcInputBox-textarea"]::-webkit-scrollbar{display:none;}
 html.zhx-theater [class*="PcInputBox-textarea"]{scrollbar-width:none;}
 html.zhx-theater [class*="PcInputBox-textarea"]::placeholder{color:rgba(255,255,255,.45) !important;}
-html.zhx-theater [class*="PcInputBox-sendBtnWrapper"],
-html.zhx-theater [class*="PcInputBox-clickTip"]{display:none !important;} /* 字数计数/提示不需要 */
-html.zhx-theater [class*="PcInputBox-sendButton"]{flex:0 0 auto !important;}
-#zhx-input-hint{color:rgba(255,255,255,.5);font-size:12px;white-space:nowrap;}
+html.zhx-theater [class*="PcInputBox-clickTip"]{display:none !important;}
+/* 字数统计内嵌输入槽尾部: 底色透明由 slot 灰底统一提供, 自带 padding 与发送按钮隔开 */
+html.zhx-theater #zhx-input-slot [class*="PcInputBox-textCount"]{
+  align-self:stretch;display:flex;align-items:center;padding:0 12px;margin:0 !important;
+  background:transparent !important;color:rgba(255,255,255,.55) !important;font-size:12px !important;
+  line-height:1 !important;white-space:nowrap;
+}
+html.zhx-theater [class*="PcInputBox-sendButton"]{
+  width:auto !important;min-width:64px;height:32px !important;padding:0 16px;
+  display:flex !important;align-items:center !important;justify-content:center !important;line-height:normal !important;
+  border:none !important;border-radius:0 8px 8px 0;
+  /* 彻底清除原生可能带有的渐变遮罩/滤镜/混合模式/阴影/伪元素, 强制全不透明 */
+  background-image:none !important;background-color:#4a83f9 !important;
+  opacity:1 !important;filter:none !important;mix-blend-mode:normal !important;box-shadow:none !important;
+  color:#fff !important;
+  font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0;margin:0 !important;
+}
+html.zhx-theater [class*="PcInputBox-sendButton"]::before,
+html.zhx-theater [class*="PcInputBox-sendButton"]::after{display:none !important;content:none !important;}
+/* 悬停加深加蓝(与音量条 accent 悬停观感同向) */
+html.zhx-theater [class*="PcInputBox-sendButton"]:hover{background-color:#2f6ce4 !important;opacity:1 !important;}
+/* 空内容的 disabled 态不再降透明度(灰蒙蒙的真凶): 仅改指针, 发送拦截由回车逻辑负责 */
+html.zhx-theater [class*="PcInputBox-sendButton"][class*="PcInputBox-disabled"]{cursor:default;opacity:1 !important;}
+/* ===== 全屏底部浮动控制条: 输入框 / 弹幕开关+设置 / 音量 ===== */
+#zhx-toolbar{
+  position:fixed;left:50%;bottom:16px;transform:translateX(-50%) translateY(150%);
+  width:min(880px,92vw);z-index:2147483647;display:none;align-items:center;gap:12px;visibility:hidden;pointer-events:none;
+  background:rgba(0,0,0,.4);backdrop-filter:blur(6px);border-radius:8px;padding:8px 14px;
+  transition:transform .18s ease,visibility 0s linear .18s;
+}
+/* 仅全屏时启用; 鼠标活动唤起时上移可见 */
+html.zhx-theater #zhx-toolbar{display:flex;}
+#zhx-toolbar.zhx-show{transform:translateX(-50%) translateY(0);visibility:visible;pointer-events:auto;transition:transform .18s ease,visibility 0s;}
+.zhx-tb-btn{
+  min-width:32px;height:32px;padding:0 10px;border:none;border-radius:16px;cursor:pointer;
+  background:rgba(255,255,255,.12);color:#fff;font-size:13px;line-height:1;white-space:nowrap;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;font-family:inherit;
+}
+.zhx-tb-btn:not(:disabled):hover{background:rgba(255,255,255,.28);}
+.zhx-tb-btn:focus-visible{outline:1px solid rgba(255,255,255,.6);}
+.zhx-tb-btn.zhx-off{color:rgba(255,255,255,.4);}
+.zhx-tb-btn:disabled{opacity:.35;cursor:not-allowed;}
+.zhx-tb-group{position:relative;display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+#zhx-tb-vol-num{color:rgba(255,255,255,.85);font-size:12px;width:28px;text-align:center;line-height:20px;margin-left:-6px;flex:0 0 auto;}
+#zhx-tb-vol{width:110px;height:20px;accent-color:#3b82f6;cursor:pointer;flex:0 0 auto;}
+.zhx-tb-sep{width:1px;height:20px;background:rgba(255,255,255,.2);flex:0 0 auto;}
+/* ===== 弹幕设置悬浮窗(弹幕设置按钮上方弹出, 线段档位选择) ===== */
+#zhx-dm-popover{
+  position:absolute;bottom:calc(100% + 12px);left:50%;transform:translateX(-50%);
+  min-width:340px;padding:14px 18px 16px;border-radius:14px;
+  background:rgba(0,0,0,.72);backdrop-filter:blur(6px);opacity:.95;
+  display:none;flex-direction:column;gap:14px;
+}
+#zhx-dm-popover.zhx-open{display:flex;}
+.zhx-dm-row{display:flex;align-items:flex-start;gap:10px;}
+.zhx-dm-row-label{color:rgba(255,255,255,.8);font-size:12px;line-height:24px;white-space:nowrap;flex:0 0 auto;}
+.zhx-dm-seg{display:flex;gap:4px;flex:1 1 auto;padding-top:7px;}
+.zhx-dm-seg-item{
+  flex:1 1 0;min-width:34px;border:none;background:none;padding:0;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:5px;font-family:inherit;
+}
+.zhx-dm-seg-item i{display:block;width:100%;height:5px;border-radius:3px;background:rgba(255,255,255,.25);transition:background .12s;}
+.zhx-dm-seg-item:hover i{background:rgba(255,255,255,.55);}
+.zhx-dm-seg-item em{font-style:normal;color:rgba(255,255,255,.55);font-size:11px;line-height:1;}
+.zhx-dm-seg-item.zhx-on i{background:#3b82f6;}
+.zhx-dm-seg-item.zhx-on em{color:#fff;}
 #zhx-toast{
   position:fixed;right:16px;bottom:16px;z-index:9999;
   padding:6px 14px;border-radius:16px;background:rgba(0,0,0,.72);color:#fff;
@@ -272,7 +342,10 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
   function scheduleRefit() { clearTimeout(refitTimer); refitTimer = setTimeout(refitPlayer, 60); }
 
   function setupWatchdog() {
-    setInterval(() => { if (state.enabled) clearPlayerInlineSizes(); }, 1500);
+    setInterval(() => {
+      if (state.enabled) clearPlayerInlineSizes();
+      applyPersistedVolume(); // 音量/静音回写(SDK 建流后可能重置)
+    }, 1500);
     window.addEventListener('resize', scheduleRefit);
     const wrapper = $find('PcLive-liveWrapper');
     if (wrapper && typeof ResizeObserver === 'function') new ResizeObserver(scheduleRefit).observe(wrapper);
@@ -353,7 +426,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       const inField = !!(t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable));
 
       // 全屏输入态: 所有按键(含 F/D/W 等)一律放行作为普通字符输入,
-      // 不触发任何快捷键, 避免打字误触全屏/弹幕开关。收起输入框用点击空白处或发送后自动收起。
+      // 不触发任何快捷键, 避免打字误触全屏/弹幕开关。输入框随控制条显隐(隐藏时自动失焦)。
       if (isTheater() && inField) {
         return;
       }
@@ -369,7 +442,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
         case ']': if (pageType === 'live') nudgeChatWidth(+CHAT_W_STEP); else return; break;
         case '[': if (pageType === 'live') nudgeChatWidth(-CHAT_W_STEP); else return; break;
         case '0': if (pageType === 'live') resetChatWidth(); else return; break;
-        case 'Enter': if (isTheater()) { showInputBar(); focusInput(); e.preventDefault(); } break;
+        case 'Enter': if (isTheater()) { showToolbar(); focusInput(); e.preventDefault(); } break;
         default: return;
       }
       e.preventDefault();
@@ -392,7 +465,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
   }
 
   function bindChatAutoScroll() {
-    let stick = true, scroller = null;
+    let stick = true, scroller = null, userTimer = 0;
 
     const attach = () => {
       const box = $find('PcChatBox-root');
@@ -400,9 +473,32 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       const el = findChatScroller();
       if (!el) return false;
       scroller = el; stick = true;
+      // 用户主动向上滚动(看历史): 立即停止贴底, 并在停止操作 1.5s 后才重新判断是否已回到底部。
+      // 不能仅靠 scroll 几何判断贴底: ReactVirtualized 虚拟列表只渲染可见行, scrollHeight 远小于
+      // 真实内容高, 滚动途中会被误判为"已贴底"而拽回底部, 导致看不了历史。
+      // wheel/touchmove 带方向信号, 只在向上时标记; 向下滚到底部时恢复跟随。
+      const markUserScrollUp = () => {
+        stick = false;
+        clearTimeout(userTimer);
+        userTimer = setTimeout(() => {
+          if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 4) {
+            stick = true; // 静止后确认在底部才恢复跟随
+          }
+        }, 1500);
+      };
+      el.addEventListener('wheel', (e) => { if (e.deltaY < 0) markUserScrollUp(); }, { passive: true });
+      let lastTouchY = null;
+      el.addEventListener('touchmove', (e) => {
+        const t = e.touches[0]; if (t && lastTouchY !== null && t.clientY > lastTouchY) markUserScrollUp();
+        lastTouchY = t ? t.clientY : null;
+      }, { passive: true });
+      // 程序触发的滚底(下方 observer)也会触发 scroll, 不能据此判断方向;
+      // 这里仅在确实贴底时恢复跟随, 避免用户向上滚时被拽回
       el.addEventListener('scroll', () => {
         if (!scroller) return;
-        stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+        if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 4) {
+          clearTimeout(userTimer); stick = true;
+        }
       }, { passive: true });
       new MutationObserver(() => { // 新消息(含虚拟列表行变化)时若贴底则保持贴底, 并推送弹幕
         if (stick && scroller && scroller.scrollHeight > scroller.clientHeight) {
@@ -517,6 +613,8 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
 
   // ================= 真全屏 =================
   let inputOriginalParent = null;
+  let inputOriginalNext = null;
+  let sendOriginalSlots = []; // [元素, 原父级, 原后继]: 全屏时抽到 #zhx-send-host 的按钮/字数统计
 
   function toggleTheater() {
     const el = $find('PcLive-liveWrapper');
@@ -535,40 +633,74 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     document.documentElement.classList.add('zhx-theater');
     // 进入全屏前, 把聊天区已有消息预标记为已见, 弹幕只推送全屏后的新发言
     markExistingMessages();
-    // 把原输入框搬进底部浮层(复用原生 Enter 发送)
+    // 把原输入框搬进控制条的输入槽(条形输入框: 最多 80 字, 回车发送)
     const input = $find('PcInputBox-root');
     const slot = document.getElementById('zhx-input-slot');
     if (input && slot) {
       inputOriginalParent = input.parentElement;
-      slot.appendChild(input);
+      inputOriginalNext = input.nextSibling;
+      slot.insertBefore(input, slot.firstChild); // root 在前, 发送按钮 host 在后
+      const ta = input.querySelector('textarea');
+      if (ta) ta.maxLength = 80;
+      // 发送按钮抽到槽外自建 host(与输入槽拼接); 字数统计移入输入槽尾部(灰底内嵌);
+      // 记录原后继节点, 退出时 insertBefore 精确还原 DOM 顺序
+      const host = document.getElementById('zhx-send-host');
+      const sendBtn = input.querySelector('[class*="PcInputBox-sendButton"]');
+      const textCount = input.querySelector('[class*="PcInputBox-textCount"]');
+      if (host && sendBtn) {
+        sendOriginalSlots = [];
+        if (textCount) {
+          sendOriginalSlots.push([textCount, textCount.parentElement, textCount.nextSibling]);
+          slot.appendChild(textCount);
+        }
+        sendOriginalSlots.push([sendBtn, sendBtn.parentElement, sendBtn.nextSibling]);
+        host.appendChild(sendBtn);
+      }
     }
-    // 弹幕层与输入浮层默认挂在 body, 但全屏元素(PcLive-liveWrapper)处于 top layer 时
-    // 会遮挡其外部(body 上)的 fixed 元素, 导致弹幕/输入框不可见。进入全屏时搬进全屏元素,
+    // 弹幕层/控制条默认挂在 body, 但全屏元素(PcLive-liveWrapper)处于 top layer 时
+    // 会遮挡其外部(body 上)的 fixed 元素, 导致浮层不可见。进入全屏时搬进全屏元素,
     // fixed 定位即以全屏元素为参照铺满画面; 退出时搬回 body。
     const fsEl = $find('PcLive-liveWrapper');
     const dm = document.getElementById('zhx-danmaku');
-    const bar = document.getElementById('zhx-input-bar');
+    const tb = document.getElementById('zhx-toolbar');
     if (fsEl && dm && dm.parentElement !== fsEl) fsEl.appendChild(dm);
-    if (fsEl && bar && bar.parentElement !== fsEl) fsEl.appendChild(bar);
+    if (fsEl && tb && tb.parentElement !== fsEl) fsEl.appendChild(tb);
     scheduleRefit();
-    toast('真全屏 · Enter 唤起输入框 · D 弹幕开关');
+    toast('真全屏 · 移动鼠标显示控制条 · Enter 聚焦发言');
     // 原生退出兜底: ESC/F11/标签失焦时浏览器自动退出, 由 fullscreenchange 收尾
     document.addEventListener('fullscreenchange', onFsChange);
   }
 
   function onExitTheater() {
     document.documentElement.classList.remove('zhx-theater');
-    // 把输入框移回原父级
+    // 控制条立即隐藏并停掉自动隐藏计时
+    clearTimeout(tbTimer);
+    hideToolbar();
+    // 把输入框移回原父级(还原字数限制、按钮/字数统计按原 DOM 位置精确回插)
     const input = $find('PcInputBox-root');
-    if (input && inputOriginalParent) inputOriginalParent.appendChild(input);
+    if (input) {
+      const ta = input.querySelector('textarea');
+      // maxLength 的 -1 只读默认值, setter 只接受非负数, 移除限制须用 removeAttribute
+      if (ta) { ta.removeAttribute('maxlength'); ta.style.height = ''; }
+      for (const [el, parent, next] of sendOriginalSlots) {
+        if (next && next.parentElement === parent) parent.insertBefore(el, next);
+        else parent.appendChild(el);
+      }
+      sendOriginalSlots = [];
+      if (inputOriginalParent) {
+        if (inputOriginalNext && inputOriginalNext.parentElement === inputOriginalParent)
+          inputOriginalParent.insertBefore(input, inputOriginalNext);
+        else inputOriginalParent.appendChild(input);
+      }
+    }
     inputOriginalParent = null;
-    // 弹幕层与输入浮层搬回 body(恢复非全屏态的默认挂载位置)
+    inputOriginalNext = null;
+    // 弹幕层/控制条搬回 body(恢复非全屏态的默认挂载位置)
     const dm = document.getElementById('zhx-danmaku');
-    const bar = document.getElementById('zhx-input-bar');
+    const tb = document.getElementById('zhx-toolbar');
     if (dm && dm.parentElement !== document.body) document.body.appendChild(dm);
-    if (bar && bar.parentElement !== document.body) document.body.appendChild(bar);
+    if (tb && tb.parentElement !== document.body) document.body.appendChild(tb);
     clearDanmaku();
-    hideInputBar();
     scheduleRefit();
   }
 
@@ -579,79 +711,298 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     }
   }
 
-  // ================= 全屏底部输入浮层 =================
-  function setupInputBar() {
-    const bar = document.createElement('div');
-    bar.id = 'zhx-input-bar';
-    const slot = document.createElement('div'); // 占位: 原 PcInputBox-root 搬入此容器
-    slot.id = 'zhx-input-slot';
-    const hint = document.createElement('span');
-    hint.id = 'zhx-input-hint';
-    hint.textContent = 'Enter 发送 · 点空白处收起';
-    bar.appendChild(slot);
-    bar.appendChild(hint);
-    document.body.appendChild(bar);
+  // 聚焦控制条内嵌的原生输入框(Enter 快捷键用)。
+  // 注意不能用 $find('PcInputBox-textarea'): 子串匹配会先命中外层的 textareaWrapper div
+  function focusInput() {
+    const ta = document.querySelector('#zhx-input-slot textarea')
+            || document.querySelector('[class*="PcLive-liveWrapper"] textarea')
+            || document.querySelector('textarea');
+    if (ta) setTimeout(() => ta.focus(), 0);
+  }
 
-    // 全屏态下点击输入浮层之外的区域, 收起输入框
-    document.addEventListener('mousedown', (e) => {
-      if (!isTheater()) return;
-      const b = document.getElementById('zhx-input-bar');
-      if (!b || !b.classList.contains('zhx-show')) return;
-      if (b.contains(e.target)) return; // 点在浮层内不收起
-      hideInputBar();
-      const ta = $find('PcInputBox-textarea');
-      if (ta) ta.blur();
+  // ================= 全屏浮动控制条 =================
+  let tbEl = null, tbTimer = 0, tbHovered = false;
+
+  // CC 播放器 SDK 运行时才在 #livePlayer 内创建 video, 需惰性查找
+  function getVideos() {
+    return document.querySelectorAll('#livePlayer video');
+  }
+
+  function setVolume(v) {
+    v = Math.min(100, Math.max(0, Math.round(v)));
+    const vids = getVideos();
+    if (!vids.length) toast('未找到视频元素, 已记住设置, 视频出现后自动应用');
+    for (const vid of vids) {
+      vid.volume = v / 100;
+      if (v > 0 && vid.muted) vid.muted = false; // 有音量拖动即解除静音
+    }
+    state.volume = v;
+    store.set(K.volume, v);
+    syncToolbar();
+  }
+
+  function toggleMute() {
+    const vids = getVideos();
+    if (!vids.length) toast('未找到视频元素, 已记住设置, 视频出现后自动应用');
+    const muted = vids.length ? !vids[0].muted : !state.muted;
+    for (const vid of vids) vid.muted = muted;
+    state.muted = muted;
+    store.set(K.muted, muted);
+    syncToolbar();
+  }
+
+  // 看门狗低频回写: 把持久化的音量/静音同步到视频(防 SDK 建流/重连后重置), 模式同尺寸看门狗;
+  // state.volume 为 null(用户从未调过)时不干预 SDK 默认值
+  function applyPersistedVolume() {
+    if (state.volume === null) return;
+    const vids = getVideos();
+    for (const vid of vids) {
+      if (Math.round(vid.volume * 100) !== state.volume) vid.volume = state.volume / 100;
+      if (vid.muted !== state.muted) vid.muted = state.muted;
+    }
+  }
+
+  // 刷新控制条控件显示; 有视频时以视频实际值为准(SDK 可能改音量), 否则读 state
+  function syncToolbar() {
+    if (!tbEl) return;
+    const vids = getVideos();
+    const vol = vids.length ? Math.round(vids[0].volume * 100)
+                            : (state.volume === null ? 100 : state.volume);
+    const muted = vids.length ? vids[0].muted : state.muted;
+    const volInput = tbEl.querySelector('#zhx-tb-vol');
+    if (document.activeElement !== volInput) volInput.value = vol; // 拖动中不回写滑条
+    tbEl.querySelector('#zhx-tb-vol-num').textContent = vol;
+    tbEl.querySelector('#zhx-tb-mute').textContent = muted ? '🔇' : '🔊';
+    const dmBtn = tbEl.querySelector('#zhx-tb-dm');
+    dmBtn.textContent = state.danmaku ? '弹幕 开' : '弹幕 关';
+    dmBtn.classList.toggle('zhx-off', !state.danmaku);
+    // 弹幕设置窗: 线段档位选中态(区域 4 档 / 速度 6~16s 步进 2)
+    const areaSeg = tbEl.querySelector('#zhx-dm-seg-area');
+    if (areaSeg) for (const item of areaSeg.children)
+      item.classList.toggle('zhx-on', +item.dataset.idx === state.dmArea);
+    const speedSeg = tbEl.querySelector('#zhx-dm-seg-speed');
+    if (speedSeg) for (const item of speedSeg.children)
+      item.classList.toggle('zhx-on', DM_DURATION_MIN + +item.dataset.idx * DM_DURATION_STEP === state.dmSpeed);
+  }
+
+  function showToolbar() {
+    if (!tbEl) return;
+    syncToolbar();
+    tbEl.classList.add('zhx-show');
+    armHide();
+  }
+
+  function hideToolbar() {
+    if (!tbEl) return;
+    tbEl.classList.remove('zhx-show');
+    closeDmPopover();
+    tbHovered = false; // 隐藏后悬停标志复位, 重新唤起需再次移入
+    // 隐藏时释放输入框焦点, 快捷键恢复正常(否则按键仍会打进不可见的输入框)
+    const ta = tbEl.querySelector('textarea');
+    if (ta) ta.blur();
+  }
+
+  // 3 秒无操作隐藏; 鼠标停在工具条上/正在输入框打字/弹幕设置窗开着则续期等待。
+  // 悬停判定优先用 mouseenter/mouseleave 维护的事件标志:
+  // 浏览器的 :hover 伪类状态可能被渲染管线重置, 定时器里轮询 matches(':hover') 不可靠
+  function armHide() {
+    clearTimeout(tbTimer);
+    tbTimer = setTimeout(() => {
+      const active = document.activeElement;
+      const typing = !!(tbEl && active && tbEl.contains(active)
+                       && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT'));
+      const popOpen = !!(tbEl && tbEl.querySelector('#zhx-dm-popover.zhx-open'));
+      if (tbEl && (tbHovered || typing || popOpen || tbEl.matches(':hover'))) { armHide(); return; }
+      hideToolbar();
+    }, 3000);
+  }
+
+  function closeDmPopover() {
+    const pop = document.getElementById('zhx-dm-popover');
+    if (pop) pop.classList.remove('zhx-open');
+  }
+
+  function setupToolbar() {
+    tbEl = document.createElement('div');
+    tbEl.id = 'zhx-toolbar';
+
+    const mkBtn = (id, text, title) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.id = id; b.className = 'zhx-tb-btn'; b.textContent = text; b.title = title;
+      return b;
+    };
+    const mkSep = () => {
+      const s = document.createElement('span');
+      s.className = 'zhx-tb-sep';
+      return s;
+    };
+
+    // 聊天输入槽: 灰底只覆盖到字数统计(输入区), 发送按钮在槽外紧挨右侧拼接
+    const inputSlot = document.createElement('div');
+    inputSlot.id = 'zhx-input-slot';
+    inputSlot.title = 'Enter 发送';
+    // 发送按钮自建容器(与输入槽平级, 真实页按钮容器的定位不受控, 抽出后位置可控)
+    const sendHost = document.createElement('div');
+    sendHost.id = 'zhx-send-host';
+
+    // 弹幕组: 开关 + 设置(设置窗锚定在本组上方)
+    const dmGroup = document.createElement('div');
+    dmGroup.className = 'zhx-tb-group';
+    const dmBtn = mkBtn('zhx-tb-dm', '弹幕 开', '全屏弹幕 开/关 (D)');
+    const dmSetBtn = mkBtn('zhx-tb-dmset', '⚙', '弹幕设置');
+    dmGroup.append(dmBtn, dmSetBtn, buildDmPopover());
+
+    // 音量组: 静音键 + 滑条 + 数值
+    const muteBtn = mkBtn('zhx-tb-mute', '🔊', '静音 / 取消静音');
+    const volInput = document.createElement('input');
+    volInput.type = 'range'; volInput.id = 'zhx-tb-vol';
+    volInput.min = 0; volInput.max = 100; volInput.step = 1;
+    volInput.title = '音量 0-100';
+    const volNum = document.createElement('span');
+    volNum.id = 'zhx-tb-vol-num';
+
+    tbEl.append(inputSlot, sendHost, mkSep(), dmGroup, mkSep(), muteBtn, volInput, volNum);
+    document.body.appendChild(tbEl);
+
+    // 悬停标志: 进入置位/离开复位, 供 armHide 判断保活
+    tbEl.addEventListener('mouseenter', () => { tbHovered = true; });
+    tbEl.addEventListener('mouseleave', () => { tbHovered = false; });
+
+    muteBtn.addEventListener('click', toggleMute);
+    volInput.addEventListener('input', () => setVolume(+volInput.value));
+    dmBtn.addEventListener('click', toggleDanmaku);
+    dmSetBtn.addEventListener('click', () => {
+      const pop = document.getElementById('zhx-dm-popover');
+      if (!pop) return;
+      pop.classList.toggle('zhx-open');
+      armHide(); // 开关设置窗算一次操作
     });
 
-    // 监听 Enter 发送: 输入态下按 Enter(非 Shift 换行), 延迟检测内容是否被原生发送清空,
-    // 清空了才收起(发送失败/频率限制时内容仍在, 不收起)。退格清空不触发。
+    // 点击设置窗之外的区域关闭它(冒泡到 document 的 mousedown 同时给工具条续期)
+    document.addEventListener('mousedown', (e) => {
+      const pop = document.getElementById('zhx-dm-popover');
+      if (!pop || !pop.classList.contains('zhx-open')) return;
+      if (pop.contains(e.target)) return;
+      const setBtn = document.getElementById('zhx-tb-dmset');
+      if (setBtn && setBtn.contains(e.target)) return;
+      closeDmPopover();
+    });
+
+    // 条形输入框回车语义: 回车发送 / 空内容回车取消输入态。
+    // capture 在默认换行行为与其他处理器之前拦截; 输入法组合中的回车(选词确认)放行。
+    // 同时 stopPropagation: 原生 React 在根容器(bubble 阶段)也监听 keydown,
+    // 仅 preventDefault 无法阻止其收到 Enter 并触发发送。
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
-      if (!isTheater()) return;
+      if (e.key !== 'Enter' || e.isComposing) return;
       const ta = e.target;
       if (!ta || ta.tagName !== 'TEXTAREA') return;
-      const bar = document.getElementById('zhx-input-bar');
-      if (!bar || !bar.classList.contains('zhx-show')) return;
-      if (ta.value.length === 0) return; // 空内容不算发送
-      setTimeout(() => {
-        if (!isTheater()) return;
-        if (ta.value.length === 0) { hideInputBar(); ta.blur(); }
-      }, 100);
+      const slot = document.getElementById('zhx-input-slot');
+      if (!slot || !slot.contains(ta)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (ta.value.trim().length > 0) sendChat();
+      else ta.blur(); // 空内容回车: 退出输入状态
     }, true);
+
+    // 全屏态下鼠标活动唤起工具条(工具条内点击冒泡到 document 同样计时); 平时保持隐藏
+    const onActivity = () => {
+      if (!isTheater() || !tbEl) return;
+      if (!tbEl.classList.contains('zhx-show')) showToolbar();
+      else armHide();
+    };
+    document.addEventListener('mousemove', onActivity, { passive: true });
+    document.addEventListener('mousedown', onActivity);
   }
 
-  function showInputBar() {
-    const bar = document.getElementById('zhx-input-bar');
-    if (bar) bar.classList.add('zhx-show');
+  // 弹幕设置悬浮窗: 两行线段档位(区域 4 档 / 速度 6 档), 仅可点选给定档位
+  function buildDmPopover() {
+    const pop = document.createElement('div');
+    pop.id = 'zhx-dm-popover';
+
+    const mkRow = (labelText, segId, options, onPick) => {
+      const row = document.createElement('div');
+      row.className = 'zhx-dm-row';
+      const label = document.createElement('span');
+      label.className = 'zhx-dm-row-label';
+      label.textContent = labelText;
+      const seg = document.createElement('div');
+      seg.className = 'zhx-dm-seg';
+      seg.id = segId;
+      options.forEach((text, i) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'zhx-dm-seg-item';
+        item.dataset.idx = i;
+        const bar = document.createElement('i');
+        const txt = document.createElement('em');
+        txt.textContent = text;
+        item.append(bar, txt);
+        item.addEventListener('click', () => onPick(i));
+        seg.appendChild(item);
+      });
+      row.append(label, seg);
+      return row;
+    };
+
+    pop.append(
+      mkRow('弹幕区域:', 'zhx-dm-seg-area', DM_AREA_TEXTS, (i) => setDmAreaIdx(i)),
+      mkRow('弹幕速度:', 'zhx-dm-seg-speed',
+            Array.from({ length: (DM_DURATION_MAX - DM_DURATION_MIN) / DM_DURATION_STEP + 1 },
+                       (_, i) => (DM_DURATION_MIN + i * DM_DURATION_STEP) + 's'),
+            (i) => setDmSpeedIdx(i))
+    );
+    return pop;
   }
-  function hideInputBar() {
-    const bar = document.getElementById('zhx-input-bar');
-    if (bar) bar.classList.remove('zhx-show');
-  }
-  function focusInput() {
-    const ta = $find('PcInputBox-textarea') || document.querySelector('textarea');
-    if (ta) setTimeout(() => ta.focus(), 0);
+
+  // 发送: 点击原生发送按钮(React 逻辑清空内容), 输入框恒为单行高度无需回落
+  function sendChat() {
+    const ta = document.querySelector('#zhx-input-slot textarea');
+    if (!ta || ta.value.trim().length === 0) return;
+    const btn = document.querySelector('#zhx-send-host [class*="PcInputBox-sendButton"], #zhx-input-slot [class*="PcInputBox-sendButton"]');
+    if (btn) btn.click();
   }
 
   // ================= 弹幕参数 =================
   function applyDmArea() {
     document.documentElement.style.setProperty('--zhx-dm-area', DM_AREA_LEVELS[state.dmArea]);
   }
+  // 设置窗点选: 直接设到指定档位(索引), 与快捷键步进共用 state/持久化/toast
+  function setDmAreaIdx(i) {
+    i = Math.min(DM_AREA_LEVELS.length - 1, Math.max(0, i));
+    if (i === state.dmArea) return;
+    state.dmArea = i;
+    store.set(K.dmArea, state.dmArea);
+    applyDmArea();
+    syncToolbar();
+    toast(`弹幕显示区域: ${DM_AREA_TEXTS[state.dmArea]} (${DM_AREA_LEVELS[state.dmArea]})`);
+  }
+  function setDmSpeedIdx(i) {
+    const v = DM_DURATION_MIN + i * DM_DURATION_STEP;
+    if (v === state.dmSpeed || v < DM_DURATION_MIN || v > DM_DURATION_MAX) return;
+    state.dmSpeed = v;
+    store.set(K.dmSpeed, state.dmSpeed);
+    syncToolbar();
+    toast(`弹幕速度: ${state.dmSpeed <= 8 ? '快' : state.dmSpeed <= 14 ? '中' : '慢'} (${state.dmSpeed}s)`);
+  }
   function nudgeDmArea(d) {
     state.dmArea = Math.min(3, Math.max(0, state.dmArea + d));
     store.set(K.dmArea, state.dmArea);
     applyDmArea();
-    toast(`弹幕显示区域: 档${state.dmArea + 1} (${DM_AREA_LEVELS[state.dmArea]})`);
+    syncToolbar();
+    toast(`弹幕显示区域: ${DM_AREA_TEXTS[state.dmArea]} (${DM_AREA_LEVELS[state.dmArea]})`);
   }
   function nudgeDmSpeed(d) {
     state.dmSpeed = Math.min(DM_DURATION_MAX, Math.max(DM_DURATION_MIN, state.dmSpeed + d));
     store.set(K.dmSpeed, state.dmSpeed);
+    syncToolbar();
     toast(`弹幕速度: ${state.dmSpeed <= 8 ? '快' : state.dmSpeed <= 14 ? '中' : '慢'} (${state.dmSpeed}s)`);
   }
   function toggleDanmaku() {
     state.danmaku = !state.danmaku;
     store.set(K.danmaku, state.danmaku);
     if (!state.danmaku) clearDanmaku();
+    syncToolbar();
     toast('全屏弹幕 ' + (state.danmaku ? '开' : '关') + (isTheater() ? '' : '(下次全屏生效)'));
   }
 
@@ -693,7 +1044,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     setupWatchdog();
     bindChatAutoScroll();
     setupDanmaku();
-    setupInputBar();
+    setupToolbar();
     setupMenu();
   }
 
