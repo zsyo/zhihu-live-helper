@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.6.0
-// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（可调显示区域/速度，仅推全屏后新发言）、全屏底部浮动控制条（左侧条形聊天输入框+蓝色发送按钮：回车发送、最多 80 字、空内容回车退出输入态；弹幕开/关与弹幕设置悬浮窗：区域 1/8~1/5 与速度 6~16s 线段档位点选；音量 0-100 与静音；鼠标移动唤出，3 秒无操作自动隐藏，打字/悬停/设置窗开着时保活）；回放/公开课页同样优化布局（W 开关）。
+// @version     1.6.1
+// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（25px 加粗、2px 黑描边加黑晕，可选白/黑/蓝/绿/红/黄六色，仅推全屏后新发言）、全屏底部浮动控制条（左侧条形聊天输入框+蓝色发送按钮：回车发送、最多 80 字、空内容回车退出输入态；弹幕开/关与弹幕设置悬浮窗：区域 1/8~1/5 与速度 6~16s 线段档位点选、颜色六档；音量 0-100 与静音；鼠标移动唤出，3 秒无操作自动隐藏，打字/悬停/设置窗开着时保活）；回放/公开课页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
 // @match       https://www.zhihu.com/xen/market/training/training-video/*
@@ -33,6 +33,7 @@
   const LOG = '[知学堂直播助手]';
   const K = { enabled: 'zhx_enabled', chatW: 'zhx_chat_w', chatFs: 'zhx_chat_fs',
               danmaku: 'zhx_danmaku', dmArea: 'zhx_dm_area', dmSpeed: 'zhx_dm_speed',
+              dmColor: 'zhx_dm_color',
               volume: 'zhx_volume', muted: 'zhx_muted' };
   const DEFAULT_CHAT_W = 'clamp(280px, 22vw, 460px)'; // ≈ 1/5 ~ 1/4 视口宽
   const CHAT_W_MIN = 240, CHAT_W_MAX = 480, CHAT_W_STEP = 20;
@@ -43,6 +44,10 @@
   const DM_TRACK_H = 36;
   const DM_DURATION_MIN = 6, DM_DURATION_MAX = 16, DM_DURATION_STEP = 2;
   const DM_MAX = 60;
+  // 弹幕颜色 6 档(白/黑/蓝/绿/红/黄)与对应 html 类名; 默认白, 除黑色用白描边外其余统一黑描边
+  const DM_COLOR_TEXTS = ['白', '黑', '蓝', '绿', '红', '黄'];
+  const DM_COLOR_CLASSES = ['zhx-dmc-white', 'zhx-dmc-black', 'zhx-dmc-blue',
+                            'zhx-dmc-green', 'zhx-dmc-red', 'zhx-dmc-yellow'];
 
   // ---- 存储层: 有 GM 用 GM, 无 GM(本地注入测试)退化为 localStorage ----
   const store = {
@@ -63,6 +68,7 @@
     danmaku: store.get(K.danmaku, true),  // 全屏弹幕开关
     dmArea: store.get(K.dmArea, 2),       // 0-3, 默认档3(1/6 屏)
     dmSpeed: Math.min(DM_DURATION_MAX, Math.max(DM_DURATION_MIN, store.get(K.dmSpeed, 10))), // 滚完秒数, 默认10s, 越小越快; 旧持久化超新范围时收敛
+    dmColor: Math.min(DM_COLOR_TEXTS.length - 1, Math.max(0, store.get(K.dmColor, 0) | 0)), // 弹幕颜色档位, 默认白; 旧持久化值越界时收敛
     volume: store.get(K.volume, null),     // 音量 0-100, null=用户未调过(不干预 SDK 默认)
     muted: store.get(K.muted, false),       // 静音开关
   };
@@ -171,11 +177,27 @@ html.zhx-theater #livePlayer{height:100% !important;width:100% !important;}
 html.zhx-theater #zhx-danmaku{display:block;}
 .zhx-dm-track{
   position:absolute;left:100%;white-space:nowrap;will-change:transform;
-  font-size:22px;line-height:36px;color:#fff;font-weight:700;
-  -webkit-text-stroke:1px #000;text-stroke:1px #000;
+  font-size:25px;line-height:36px;color:#fff;font-weight:700;
+  -webkit-text-stroke:2px #000;text-stroke:2px #000;
   paint-order:stroke fill;
+  /* 黑晕: 实心 1px + 两级扩散。描边只护字形轮廓, 护不住笔画内部,
+     白底画面上白色笔画与背景融为一体, 靠这圈柔黑把字形从背景里托出来 */
+  text-shadow:0 1px 0 rgba(0,0,0,.9),0 0 3px rgba(0,0,0,.8),0 0 7px rgba(0,0,0,.55);
   animation:zhx-dm-scroll linear forwards;
 }
+/* 弹幕颜色 6 档(白/黑/蓝/绿/红/黄): html 挂 zhx-dmc-* 类切换, 在屏弹幕即时跟随。
+   白色即下方默认(单独一条同效规则只为显式); 黑色反配白描边白晕(其余五色在黑底上
+   都醒目, 唯独黑色需要白描边才托得住), 蓝/绿/红/黄只改字色, 沿用默认黑描边+黑晕 */
+html.zhx-dmc-white .zhx-dm-track{color:#fff;}
+html.zhx-dmc-black .zhx-dm-track{
+  color:#000;
+  -webkit-text-stroke:2px #fff;text-stroke:2px #fff;
+  text-shadow:0 1px 0 rgba(255,255,255,.95),0 0 3px rgba(255,255,255,.9),0 0 7px rgba(255,255,255,.6);
+}
+html.zhx-dmc-blue .zhx-dm-track{color:#00a1d6;}
+html.zhx-dmc-green .zhx-dm-track{color:#2ecc71;}
+html.zhx-dmc-red .zhx-dm-track{color:#ff4d4f;}
+html.zhx-dmc-yellow .zhx-dm-track{color:#ffd700;}
 @keyframes zhx-dm-scroll{from{transform:translateX(0)}to{transform:translateX(calc(-100vw - 100%))}}
 /* ===== 全屏控制条: 聊天输入组(复用原 PcInputBox) =====
    灰底整体画在输入槽(slot)上并锁定 32px 高(与发送按钮/其他控件一致,
@@ -271,6 +293,14 @@ html.zhx-theater #zhx-toolbar{display:flex;}
 .zhx-dm-seg-item em{font-style:normal;color:rgba(255,255,255,.55);font-size:11px;line-height:1;}
 .zhx-dm-seg-item.zhx-on i{background:#3b82f6;}
 .zhx-dm-seg-item.zhx-on em{color:#fff;}
+/* 弹幕颜色档位: 选项文字直接用对应弹幕颜色, 与画面效果直观对应(ID 选择器压过选中态变白)。
+   黑色选项加轻微白描边: 深色面板底上纯黑字会糊进背景 */
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="0"] em{color:#fff;}
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="1"] em{color:#000;-webkit-text-stroke:.5px rgba(255,255,255,.9);paint-order:stroke fill;}
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="2"] em{color:#00a1d6;}
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="3"] em{color:#2ecc71;}
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="4"] em{color:#ff4d4f;}
+#zhx-dm-seg-color .zhx-dm-seg-item[data-idx="5"] em{color:#ffd700;}
 #zhx-toast{
   position:fixed;right:16px;bottom:16px;z-index:9999;
   padding:6px 14px;border-radius:16px;background:rgba(0,0,0,.72);color:#fff;
@@ -776,13 +806,16 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     const dmBtn = tbEl.querySelector('#zhx-tb-dm');
     dmBtn.textContent = state.danmaku ? '弹幕 开' : '弹幕 关';
     dmBtn.classList.toggle('zhx-off', !state.danmaku);
-    // 弹幕设置窗: 线段档位选中态(区域 4 档 / 速度 6~16s 步进 2)
+    // 弹幕设置窗: 线段档位选中态(区域 4 档 / 速度 6~16s 步进 2 / 颜色 6 档)
     const areaSeg = tbEl.querySelector('#zhx-dm-seg-area');
     if (areaSeg) for (const item of areaSeg.children)
       item.classList.toggle('zhx-on', +item.dataset.idx === state.dmArea);
     const speedSeg = tbEl.querySelector('#zhx-dm-seg-speed');
     if (speedSeg) for (const item of speedSeg.children)
       item.classList.toggle('zhx-on', DM_DURATION_MIN + +item.dataset.idx * DM_DURATION_STEP === state.dmSpeed);
+    const colorSeg = tbEl.querySelector('#zhx-dm-seg-color');
+    if (colorSeg) for (const item of colorSeg.children)
+      item.classList.toggle('zhx-on', +item.dataset.idx === state.dmColor);
   }
 
   function showToolbar() {
@@ -915,7 +948,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     document.addEventListener('mousedown', onActivity);
   }
 
-  // 弹幕设置悬浮窗: 两行线段档位(区域 4 档 / 速度 6 档), 仅可点选给定档位
+  // 弹幕设置悬浮窗: 三行线段档位(区域 4 档 / 速度 6 档 / 颜色 6 档), 仅可点选给定档位
   function buildDmPopover() {
     const pop = document.createElement('div');
     pop.id = 'zhx-dm-popover';
@@ -950,7 +983,8 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
       mkRow('弹幕速度:', 'zhx-dm-seg-speed',
             Array.from({ length: (DM_DURATION_MAX - DM_DURATION_MIN) / DM_DURATION_STEP + 1 },
                        (_, i) => (DM_DURATION_MIN + i * DM_DURATION_STEP) + 's'),
-            (i) => setDmSpeedIdx(i))
+            (i) => setDmSpeedIdx(i)),
+      mkRow('弹幕颜色:', 'zhx-dm-seg-color', DM_COLOR_TEXTS, (i) => setDmColorIdx(i))
     );
     return pop;
   }
@@ -966,6 +1000,12 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
   // ================= 弹幕参数 =================
   function applyDmArea() {
     document.documentElement.style.setProperty('--zhx-dm-area', DM_AREA_LEVELS[state.dmArea]);
+  }
+  // 弹幕颜色: html 挂 zhx-dmc-* 类切换, CSS 定义各色描边/晕影, 在屏弹幕即时跟随
+  function applyDmColor() {
+    const html = document.documentElement;
+    for (const c of DM_COLOR_CLASSES) html.classList.remove(c);
+    html.classList.add(DM_COLOR_CLASSES[state.dmColor]);
   }
   // 设置窗点选: 直接设到指定档位(索引), 与快捷键步进共用 state/持久化/toast
   function setDmAreaIdx(i) {
@@ -1005,6 +1045,16 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     syncToolbar();
     toast('全屏弹幕 ' + (state.danmaku ? '开' : '关') + (isTheater() ? '' : '(下次全屏生效)'));
   }
+  // 弹幕颜色: 白/黑/蓝/绿/红/黄 六档, 默认白; setter 与快捷键同款 clamp, 切换即时作用于在屏弹幕
+  function setDmColorIdx(i) {
+    i = Math.min(DM_COLOR_TEXTS.length - 1, Math.max(0, i));
+    if (i === state.dmColor) return;
+    state.dmColor = i;
+    store.set(K.dmColor, i);
+    applyDmColor();
+    syncToolbar();
+    toast('弹幕颜色: ' + DM_COLOR_TEXTS[i]);
+  }
 
   // ================= 提示 / 油猴菜单 =================
   function setupToast() {
@@ -1029,6 +1079,8 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     GM_registerMenuCommand('弹幕显示区域 减小 (,)', () => nudgeDmArea(-1));
     GM_registerMenuCommand('弹幕滚动速度 加快 (=)', () => nudgeDmSpeed(-DM_DURATION_STEP));
     GM_registerMenuCommand('弹幕滚动速度 减慢 (-)', () => nudgeDmSpeed(+DM_DURATION_STEP));
+    GM_registerMenuCommand('弹幕颜色 轮换 (白/黑/蓝/绿/红/黄)',
+                           () => setDmColorIdx((state.dmColor + 1) % DM_COLOR_TEXTS.length));
   }
 
   // ================= 启动 =================
@@ -1039,6 +1091,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     applyChatFs();
     applyChatW();
     applyDmArea();
+    applyDmColor();
     applyMode();
     setupShortcuts();
     setupWatchdog();
