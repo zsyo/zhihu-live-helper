@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        知乎知学堂直播布局助手
 // @namespace   https://github.com/zsyo/zhihu-live-helper
-// @version     1.6.1
-// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（25px 加粗、2px 黑描边加黑晕，可选白/黑/蓝/绿/红/黄六色，仅推全屏后新发言）、全屏底部浮动控制条（左侧条形聊天输入框+蓝色发送按钮：回车发送、最多 80 字、空内容回车退出输入态；弹幕开/关与弹幕设置悬浮窗：区域 1/8~1/5 与速度 6~16s 线段档位点选、颜色六档；音量 0-100 与静音；鼠标移动唤出，3 秒无操作自动隐藏，打字/悬停/设置窗开着时保活）；回放/公开课页同样优化布局（W 开关）。
+// @version     1.6.2
+// @description 重排知乎知学堂直播页、回放页与公开课页：视频区随窗口自适应并占据主体（16:9），右侧目录/互动区保持原生宽；直播页支持真全屏（F 键）、全屏弹幕（25px 加粗、2px 黑描边加黑晕，可选白/黑/蓝/绿/红/黄六色，仅推全屏后新发言）、全屏底部浮动控制条（左侧条形聊天输入框+蓝色发送按钮：回车发送、最多 80 字、空内容回车退出输入态；弹幕开/关与弹幕设置悬浮窗：区域 1/8~1/5 与速度 6~16s 线段档位点选、颜色六档；音量 0-100 与静音；鼠标移动唤出，3 秒无操作自动隐藏，打字/悬停/设置窗开着时保活）；进房自动起播（自动点掉引导封面与播放器自动播放遮罩，仅在视频流就绪时触发）；回放/公开课页同样优化布局（W 开关）。
 // @author      zephyr
 // @match       https://www.zhihu.com/xen/training/live/*
 // @match       https://www.zhihu.com/xen/market/training/training-video/*
@@ -348,6 +348,57 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     styleEl.id = 'zhx-live-style';
     styleEl.textContent = CSS;
     document.documentElement.appendChild(styleEl);
+  }
+
+  // ================= 进房自动起播 =================
+  // 进房间后"有声音没画面"来自两层遮挡, 都要替用户点掉:
+  //  1) 知乎应用层的引导封面 [class*="PcPlayer-introWrapper"](z-index:20) 盖住整个播放器,
+  //     中央播放图标 [class*="Prompt-videoIcBegin"] 绑定 React onClick, 点掉才露出视频;
+  //  2) CC 播放器 SDK 的 #ccAutoPlay 遮罩: 首次 flvPlayer.play() 的 Promise 常被自身的
+  //     pause() 打断成 AbortError, 被误判为"禁止自动播放"而挂出; 按钮绑定 player.play("btn"),
+  //     触发后 SDK 才收尾隐藏遮罩并标记 playing。
+  // 只在视频流已就绪时介入, 免得在未开播的等待/暖场态乱点。
+  const START_TICK = 400;
+  const START_COOLDOWN = 1200;
+  const START_MAX_TRIES = 8;
+  let startLast = 0, startTries = 0, startName = '';
+
+  function clickStart(el, name) {
+    const video = document.querySelector('#livePlayer video');
+    if (!video || !(video.currentSrc || video.src)
+        || (video.readyState < 2 && !(video.currentTime > 0))) return;
+    if (startTries >= START_MAX_TRIES) return;
+    const now = Date.now();
+    if (now - startLast < START_COOLDOWN) return;
+    startLast = now;
+    startTries++;
+    el.click(); // React onClick 与 SDK 按钮监听都能由事件派发触发, 无需可信用户手势
+    console.log(LOG, '自动起播: 已点掉' + name, startTries);
+    if (startTries === START_MAX_TRIES)
+      console.warn(LOG, '自动起播: 多次尝试后画面仍被遮挡, 请手动点击播放');
+  }
+
+  function setupAutoPlay() {
+    setInterval(() => {
+      // 站点类名带构建哈希, 一律用属性前缀选择器; #ccAutoPlay 与 cc-* 来自 SDK, 无哈希
+      const intro = document.querySelector('[class*="PcPlayer-introWrapper"]');
+      let target = null;
+      if (intro && getComputedStyle(intro).display !== 'none') {
+        const btn = intro.querySelector('[class*="Prompt-videoIcBegin"]');
+        if (btn) target = { el: btn, name: '引导封面' };
+      }
+      if (!target) {
+        const mask = document.getElementById('ccAutoPlay')
+                  || document.querySelector('#livePlayer [class*="cc-autoplay-mask"]');
+        if (mask && mask.style.display !== 'none' && getComputedStyle(mask).display !== 'none') {
+          const btn = mask.querySelector('[class*="cc-play-btn"]');
+          if (btn) target = { el: btn, name: '播放器遮罩' };
+        }
+      }
+      if (!target) { startName = ''; startTries = 0; return; }
+      if (startName !== target.name) { startName = target.name; startTries = 0; }
+      clickStart(target.el, target.name);
+    }, START_TICK);
   }
 
   // ================= 播放器尺寸兜底 =================
@@ -1095,6 +1146,7 @@ html.zhx-enhanced [class*="PcContent-rightContainer"]{flex:0 0 auto !important;m
     applyMode();
     setupShortcuts();
     setupWatchdog();
+    setupAutoPlay();
     bindChatAutoScroll();
     setupDanmaku();
     setupToolbar();
